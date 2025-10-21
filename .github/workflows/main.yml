@@ -1,0 +1,62 @@
+name: VPS
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 ساعات
+    steps:
+      - name: Prepare environment
+        run: |
+          sudo apt update -y
+          sudo apt install -y openssh-server curl unzip jq
+          echo "✅ Environment ready"
+
+      - name: Configure SSH
+        run: |
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          echo "root:admin@123" | sudo chpasswd
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo service ssh restart
+          echo "✅ SSH configured: user=root | pass=admin@123"
+
+      - name: Install Ngrok
+        run: |
+          curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o ngrok.zip
+          unzip ngrok.zip
+          sudo mv ngrok /usr/local/bin/ngrok
+          ngrok config add-authtoken ${{ secrets.NGROK_AUTH_TOKEN }}
+          echo "✅ Ngrok installed successfully"
+
+      - name: Start Ngrok Tunnel
+        run: |
+          nohup ngrok tcp 22 --region eu > /dev/null 2>&1 &
+          sleep 10
+          # تأكد أن ngrok شغّال قبل محاولة جلب الرابط
+          if ! curl -s http://127.0.0.1:4040/api/tunnels > /dev/null; then
+            echo "❌ ngrok لم يبدأ بعد. فشل في الاتصال بواجهة API." && exit 1
+          fi
+          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          if [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ]; then
+            echo "❌ فشل في جلب رابط ngrok." && exit 1
+          fi
+          echo "NGROK_URL=$NGROK_URL" >> $GITHUB_ENV
+          echo "✅ Ngrok Tunnel started: $NGROK_URL"
+
+      - name: Show Connection Info
+        run: |
+          echo "------------------------------------"
+          echo "✅ VPS is Ready!"
+          echo "🌍 Connect using:"
+          echo "ssh root@${NGROK_URL#tcp://}"
+          echo "🔑 Password: admin@123"
+          echo "------------------------------------"
+
+      - name: Keep VPS Alive
+        run: |
+          while true; do
+            echo "[$(date)] VPS running..."
+            sleep 300
+          done
