@@ -1,0 +1,88 @@
+GitHub Actions workflow: Expose Windows RDP over manually downloaded ngrok
+
+name: rdp-ngrok-windows
+
+on: workflow_dispatch: {}
+
+jobs: expose-rdp: runs-on: windows-latest
+
+steps:
+  - name: Checkout repo (optional)
+    uses: actions/checkout@v4
+
+  - name: Download ngrok manually
+    run: |
+      Write-Host "Downloading ngrok manually..."
+      $url = 'https://bin.equinox.io/c/4VmDzA7iaHb/ngrok-stable-windows-amd64.zip'
+      $zip = "$env:TEMP\\ngrok.zip"
+      Invoke-WebRequest -Uri $url -OutFile $zip
+      Expand-Archive -Path $zip -DestinationPath . -Force
+      Write-Host "ngrok downloaded successfully."
+    shell: pwsh
+
+  - name: Configure RDP user & enable RDP
+    run: |
+      $user = 'AdminRDP'
+      $pass = 'Admin@123'
+
+      $exists = (Get-LocalUser -Name $user -ErrorAction SilentlyContinue)
+      if (-not $exists) {
+        Write-Host "Creating user $user..."
+        net user $user $pass /add
+        net localgroup "Remote Desktop Users" $user /add
+      } else {
+        Write-Host "User exists — updating password..."
+        net user $user $pass
+      }
+
+      Set-ItemProperty -Path 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name 'fDenyTSConnections' -Value 0
+      Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      Write-Host "RDP enabled successfully."
+    shell: pwsh
+
+  - name: Configure ngrok authtoken
+    run: |
+      .\ngrok.exe authtoken "2djLTmobrbI08caCBgSQBjTVQf1_4fovdwuRCQ8yy7qqofmdw"
+      Write-Host "ngrok authtoken configured."
+    shell: pwsh
+
+  - name: Start ngrok TCP tunnel for RDP
+    run: |
+      Start-Process -FilePath .\ngrok.exe -ArgumentList "tcp 3389 --log=stdout" -NoNewWindow
+      Start-Sleep -Seconds 6
+
+      $tries = 0
+      while ($tries -lt 10) {
+        try {
+          $api = Invoke-RestMethod -Uri http://127.0.0.1:4040/api/tunnels -ErrorAction Stop
+          break
+        } catch {
+          Start-Sleep -Seconds 1
+          $tries++
+        }
+      }
+
+      if (-not $api) {
+        Write-Error "Could not reach ngrok API at http://127.0.0.1:4040 — ngrok may have failed to start."
+        exit 1
+      }
+
+      $out = $api.tunnels | Select-Object public_url,proto,config
+      $out | ConvertTo-Json | Out-File ngrok-tunnels.json -Encoding utf8
+      Write-Host "ngrok tunnel info saved to ngrok-tunnels.json"
+      $out | ForEach-Object { Write-Host "Public URL: $($_.public_url)" }
+    shell: pwsh
+
+  - name: Upload ngrok tunnel info
+    uses: actions/upload-artifact@v4
+    with:
+      name: ngrok-info
+      path: ngrok-tunnels.json
+
+  - name: Keep job running (optional)
+    if: ${{ always() }}
+    run: |
+      Write-Host "Runner will sleep for 30 minutes to keep the tunnel alive. Cancel the workflow when done."
+      Start-Sleep -Seconds 1800
+    shell: pwsh
+
