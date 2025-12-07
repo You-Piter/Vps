@@ -1,0 +1,61 @@
+name: VPS
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-vps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 ساعات
+    steps:
+      - name: Start VPS (SSH + Ngrok)
+        run: |
+          echo "🟢 إعداد VPS قيد التنفيذ..."
+          sudo apt update -y
+          sudo apt install -y openssh-server curl unzip jq
+
+          echo "🔧 تفعيل SSH..."
+          sudo systemctl enable ssh
+          sudo systemctl start ssh
+          echo "root:admin@123" | sudo chpasswd
+          sudo sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
+          sudo service ssh restart
+          echo "✅ SSH جاهز (user: root | pass: admin@123)"
+
+          echo "🌐 تثبيت ngrok..."
+          curl -sL https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-stable-linux-amd64.zip -o ngrok.zip
+          unzip ngrok.zip
+          sudo mv ngrok /usr/local/bin/ngrok
+
+          # 🔑 ضع توكن ngrok الخاص بك هنا
+          NGROK_TOKEN="2djLTmobrbI08caCBgSQBjTVQf1_4fovdwuRCQ8yy7qqofmdw"
+          ngrok config add-authtoken $NGROK_TOKEN
+
+          echo "🚀 تشغيل نفق ngrok..."
+          nohup ngrok tcp 22 --region eu > /dev/null 2>&1 &
+          sleep 10
+
+          echo "🕵️ الحصول على رابط النفق..."
+          if ! curl -s http://127.0.0.1:4040/api/tunnels > /dev/null; then
+            echo "❌ ngrok لم يبدأ بعد، فشل الاتصال بالـ API."
+            exit 1
+          fi
+
+          NGROK_URL=$(curl -s http://127.0.0.1:4040/api/tunnels | jq -r '.tunnels[0].public_url')
+          if [ -z "$NGROK_URL" ] || [ "$NGROK_URL" = "null" ]; then
+            echo "❌ فشل في جلب رابط ngrok."
+            exit 1
+          fi
+
+          echo "✅ ngrok يعمل بنجاح!"
+          echo "------------------------------------"
+          echo "🔌 معلومات الاتصال:"
+          echo "ssh root@${NGROK_URL#tcp://}"
+          echo "🔑 كلمة المرور: admin@123"
+          echo "------------------------------------"
+
+          echo "🕒 إبقاء السيرفر شغال..."
+          while true; do
+            echo "[$(date)] VPS running..."
+            sleep 300
+          done
+          
